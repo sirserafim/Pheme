@@ -1,0 +1,74 @@
+name: CI
+
+# push tests the exact commit that was pushed (the PR head SHA used for local evidence).
+# pull_request tests GitHub's merge of that head into the base branch, i.e. what merging would produce.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Third-party actions are pinned to full commit SHAs; see docs/versions.md for the update policy.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Two commits, so a pull_request merge commit has both of its parents for the tree comparison.
+          fetch-depth: 2
+      - name: Record tested commit
+        run: bash .github/scripts/record-tested-commit.sh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: node --version && npm --version
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+
+  integration:
+    name: Integration tests and Compose smoke test (Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Record tested commit
+        run: bash .github/scripts/record-tested-commit.sh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: node --version && npm --version && docker version --format 'Docker {{.Server.Version}}'
+      - run: npm ci
+      - run: npm run test:integration
+      - name: Compose smoke test with the example settings
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose up --detach --wait --wait-timeout 120
+          docker compose exec -T postgres sh -c 'psql --no-psqlrc -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SHOW data_directory"'
+      # Unlike local development, this volume holds only throwaway data for this run.
+      - name: Remove the temporary CI database volume
+        if: always()
+        run: docker compose down --volumes

@@ -1,0 +1,11 @@
+# Proposes updates for the SHA-pinned GitHub Actions; each proposed SHA is checked against its
+# release tag before merging. npm dependencies are updated deliberately per phase instead
+# (see docs/versions.md), so there is no npm entry here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
