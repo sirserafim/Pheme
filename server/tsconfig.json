@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    // TypeScript 7 defaults "types" to []; Node's globals (process, Buffer) must be listed.
+    "types": ["node"],
+    "rootDir": ".",
+
+    // tsc only type-checks; tsx (dev) and Vitest (tests) run the .ts files directly.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    // Per-file transpilers need explicit `import type`; erasable syntax keeps the code
+    // runnable by tools that strip types without transforming code (no enums or namespaces).
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

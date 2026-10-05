@@ -1,0 +1,25 @@
+{
+  "name": "pheme",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Personal learning/portfolio project: mention ingestion, PostgreSQL, LLM enrichment and REST/MCP access.",
+  "type": "module",
+  "workspaces": [
+    "server"
+  ],
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "npm run typecheck -w server",
+    "test:unit": "npm run test:unit -w server",
+    "test:integration": "npm run test:integration -w server",
+    "test": "npm run test:unit && npm run test:integration",
+    "dev": "npm run dev -w server"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15"
+  }
+}
