@@ -40,6 +40,6 @@ Personal learning/portfolio project: mention ingestion → PostgreSQL → LLM en
 
 ## Definition of done
 - Run relevant lint/types/unit/integration/smoke checks, including failure recovery. Normal PR tests are deterministic, make no paid calls and do not merely mirror implementation.
-- Review CI for the exact commit. Report commands, exit codes and tests that were skipped/blocked; never label unavailable checks passed. Include real demo evidence separately from fixture results.
+- Review CI for the exact commit: local evidence and push CI test the PR head SHA; pull_request CI tests GitHub's merge commit, a different SHA. Record both SHAs and which one each result covers. Report commands, exit codes and tests that were skipped/blocked; never label unavailable checks passed. Include real demo evidence separately from fixture results.
 - Measure performance on a stated dataset/environment before optimising. Report observations, not "fastest" or "production-ready" claims.
 - End each phase with: changes, evidence, remaining limits; explain 2–3 concepts in Greek and ask 5 interview questions without answers. The owner answers before moving on.

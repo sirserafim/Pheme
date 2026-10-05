@@ -5,7 +5,7 @@ Revised 2026-10-05. These are implementation specifications, not evidence that s
 ## Workflow
 Copy only the current phase into a new Cursor chat, with AGENTS.md in context. Opus implements; separate Codex/Astra review checks the plan and PR. Review the plan before implementation, particularly phases 0, 1, 2, 4, 5 and 7. One phase = one branch = one PR. Resolve review findings and answer the teaching questions before the next phase.
 
-Delivery: phases 0–7 plus phase 9 documentation/demo. Phase 3 needs a real permitted input before phase 4 if phase 2's source is unsuitable. Angular, hosting and scheduled paid calls are optional. GitHub CI and local test evidence must refer to the same commit. See SOURCES.md for dated documentation; it is not a dependency lockfile.
+Delivery: phases 0–7 plus phase 9 documentation/demo. Phase 3 needs a real permitted input before phase 4 if phase 2's source is unsuitable. Angular, hosting and scheduled paid calls are optional. Local test evidence and push CI must refer to the same PR head commit; pull_request CI also tests the merge result, so record the head SHA and the tested merge SHA. See SOURCES.md for dated documentation; it is not a dependency lockfile.
 
 ## Phase 0 — Reproducible setup
 ```text
