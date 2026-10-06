@@ -72,7 +72,8 @@ Press Ctrl+C to stop it: it logs `shutdown requested`, closes the connection poo
 
 Logs are JSON lines on **stderr**. Stdout stays free for command output, and later for MCP
 messages. Each line has `service` and a per-process `runId`. Passwords and connection strings are
-redacted, and the target database is logged as host, port, database and user only:
+redacted however short they are; a very short password also masks the same characters in
+unrelated log text. The target database is logged as host, port, database and user only:
 
 ```json
 {"level":30,"service":"pheme-server","runId":"…","db":{"host":"127.0.0.1","port":5432,"database":"pheme","user":"pheme_app"},"latencyMs":42,"msg":"db ok"}

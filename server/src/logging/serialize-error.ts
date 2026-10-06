@@ -14,7 +14,7 @@ const MAX_AGGREGATED_ERRORS = 5;
  * Copies only an allowlist of fields. Libraries attach extra properties to errors (pg adds
  * `detail` with row values, Node's URL errors add `input` with the full URL), so copying every
  * enumerable property, as pino's default serializer does, could log data or credentials.
- * Text is scrubbed later, when the whole log line is written.
+ * The strings in the result are scrubbed afterwards by sanitizeValue().
  */
 export function serializeError(value: unknown, depth = 0): SerializedError {
   if (!(value instanceof Error)) {
