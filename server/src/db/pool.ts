@@ -39,12 +39,17 @@ export function createPool(config: DatabaseConfig, logger: Logger): Pool {
   return pool;
 }
 
+/**
+ * Decodes the components the way pg-connection-string does, so the log shows the database pg
+ * actually connects to. Expects a URL that already passed databaseEnvSchema; anything else
+ * throwing here is a programming error.
+ */
 export function describeDatabase(url: string): DatabaseTarget {
   const parsed = new URL(url);
   return {
-    host: parsed.hostname,
+    host: decodeURIComponent(parsed.hostname),
     port: parsed.port === '' ? DEFAULT_PORT : Number(parsed.port),
-    database: decodeURIComponent(parsed.pathname.slice(1)),
+    database: decodeURI(parsed.pathname.slice(1)),
     user: decodeURIComponent(parsed.username),
   };
 }
