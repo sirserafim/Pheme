@@ -39,27 +39,40 @@ export function createPool(config: DatabaseConfig, logger: Logger): Pool {
   return pool;
 }
 
+/** A connected pg client, or a test double. `connection.stream` is the TCP socket. */
+export interface TrackedClient {
+  once(event: 'end', listener: () => void): unknown;
+  connection?: { stream?: { destroy(): void } };
+}
+
 /** The part of a pg Pool that trackConnections() listens to; tests pass an EventEmitter. */
 export interface ConnectionEvents {
-  on(
-    event: 'connect',
-    listener: (client: { once(event: 'end', listener: () => void): unknown }) => void,
-  ): unknown;
+  on(event: 'connect', listener: (client: TrackedClient) => void): unknown;
+}
+
+export interface TrackedConnections {
+  allClosed(): Promise<void>;
+  /** Destroys leftover sockets. A timeout race does not do this by itself. */
+  abandon(): void;
 }
 
 /**
  * pool.end() resolves as soon as the pool has dropped its clients, but each socket closes later,
  * and never if the server stops answering; an open socket keeps the process alive. This records
- * every connection the pool opens, so shutdown can wait until all of them have really closed.
+ * every connection the pool opens, so shutdown can wait until all of them have really closed
+ * and, if the deadline expires, destroy the ones that have not.
  */
-export function trackConnections(pool: ConnectionEvents): { allClosed(): Promise<void> } {
-  const open = new Set<object>();
+export function trackConnections(pool: ConnectionEvents): TrackedConnections {
+  const open = new Set<TrackedClient>();
   const waiting: (() => void)[] = [];
+  const notifyIfIdle = () => {
+    if (open.size === 0) for (const resolve of waiting.splice(0)) resolve();
+  };
   pool.on('connect', (client) => {
     open.add(client);
     client.once('end', () => {
       open.delete(client);
-      if (open.size === 0) for (const resolve of waiting.splice(0)) resolve();
+      notifyIfIdle();
     });
   });
   return {
@@ -69,6 +82,9 @@ export function trackConnections(pool: ConnectionEvents): { allClosed(): Promise
         : new Promise<void>((resolve) => {
             waiting.push(resolve);
           }),
+    abandon: () => {
+      for (const client of [...open]) client.connection?.stream?.destroy();
+    },
   };
 }
 

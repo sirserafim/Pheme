@@ -16,6 +16,8 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 export interface DevDatabase {
   check(): Promise<HealthResult>;
   close(): Promise<void>;
+  /** Cancels leftover sockets. Called when close() fails or passes its deadline. */
+  abandon(): void;
 }
 
 export interface DevDependencies {
@@ -120,6 +122,7 @@ function openPgDatabase(config: DatabaseConfig, logger: Logger): DevDatabase {
       await pool.end();
       await connections.allClosed();
     },
+    abandon: () => connections.abandon(),
   };
 }
 
@@ -128,5 +131,8 @@ async function closeDatabase(database: DevDatabase, logger: Logger, timeoutMs: n
   const outcome = await runWithTimeout(() => database.close(), timeoutMs);
   if (outcome.status === 'failed') logger.error({ err: outcome.error }, 'closing database pool failed');
   if (outcome.status === 'timeout') logger.error({ timeoutMs }, 'closing database pool timed out');
+  // Waiting stopped; the close() task itself did not. Destroy leftover sockets so they cannot
+  // keep the process alive after the deadline.
+  if (outcome.status !== 'done') database.abandon();
   return outcome.status === 'done';
 }

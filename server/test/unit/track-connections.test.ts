@@ -33,6 +33,29 @@ describe('trackConnections', () => {
     expect(await isResolved(allClosed)).toBe(true);
   });
 
+  it('destroys leftover sockets on abandon', () => {
+    const pool = new EventEmitter();
+    const connections = trackConnections(pool);
+    const destroyed: string[] = [];
+    const stillOpen = {
+      once: () => stillOpen,
+      connection: { stream: { destroy: () => destroyed.push('open') } },
+    };
+    const alreadyEnded = {
+      once: (_event: string, listener: () => void) => {
+        listener();
+        return alreadyEnded;
+      },
+      connection: { stream: { destroy: () => destroyed.push('ended') } },
+    };
+    pool.emit('connect', stillOpen);
+    pool.emit('connect', alreadyEnded);
+
+    connections.abandon();
+
+    expect(destroyed).toEqual(['open']);
+  });
+
   it('does not wait for clients that ended before shutdown', async () => {
     const pool = new EventEmitter();
     const connections = trackConnections(pool);

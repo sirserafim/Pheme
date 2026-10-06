@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { type DevDatabase, runDev } from '../../src/commands/dev.ts';
 import type { HealthResult } from '../../src/db/health.ts';
 import { captureLogs } from '../support/capture-logs.ts';
+import { countOccurrences } from '../support/secrets.ts';
 
 const SECRET = 'hunter2-not-a-real-password';
 const VALID_ENV = { DATABASE_URL: 'postgres://pheme_app:synthetic-password@127.0.0.1:5432/pheme' };
@@ -10,10 +11,11 @@ const VALID_ENV = { DATABASE_URL: 'postgres://pheme_app:synthetic-password@127.0
 interface FakeDatabaseOptions {
   check?: () => Promise<HealthResult>;
   close?: () => Promise<void>;
+  abandon?: () => void;
 }
 
 function fakeDatabase(options: FakeDatabaseOptions = {}) {
-  const calls = { check: 0, close: 0 };
+  const calls = { check: 0, close: 0, abandon: 0 };
   const database: DevDatabase = {
     check: () => {
       calls.check++;
@@ -22,6 +24,10 @@ function fakeDatabase(options: FakeDatabaseOptions = {}) {
     close: () => {
       calls.close++;
       return options.close?.() ?? Promise.resolve();
+    },
+    abandon: () => {
+      calls.abandon++;
+      options.abandon?.();
     },
   };
   return { database, calls };
@@ -124,6 +130,7 @@ describe('runDev shutdown', () => {
     await expect(dev.result).resolves.toBe(0);
     expect(dev.messages()).toEqual(['dev starting', 'db ok', 'shutdown requested', 'shutdown complete']);
     expect(calls.close).toBe(1);
+    expect(calls.abandon).toBe(0);
     expect(dev.exit).not.toHaveBeenCalled();
     expectNoSignalListeners(dev.signals);
   });
@@ -141,7 +148,7 @@ describe('runDev shutdown', () => {
   });
 
   it('forces exit 1 and reports no success when closing the pool fails', async () => {
-    const { database } = fakeDatabase({
+    const { database, calls } = fakeDatabase({
       close: () => Promise.reject(new Error('synthetic close failure for synthetic-password')),
     });
     const dev = startDev(database);
@@ -157,12 +164,13 @@ describe('runDev shutdown', () => {
       'shutdown requested',
       'closing database pool failed',
     ]);
-    expect(dev.logs.text()).not.toContain('synthetic-password');
+    expect(countOccurrences(dev.logs.text(), 'synthetic-password')).toBe(0);
+    expect(calls.abandon).toBe(1);
     expectNoSignalListeners(dev.signals);
   });
 
   it('forces exit 1 at the deadline when closing the pool hangs', async () => {
-    const { database } = fakeDatabase({ close: () => new Promise<void>(() => {}) });
+    const { database, calls } = fakeDatabase({ close: () => new Promise<void>(() => {}) });
     const dev = startDev(database, { shutdownTimeoutMs: 50 });
 
     await dev.waitForMessage('db ok');
@@ -177,6 +185,7 @@ describe('runDev shutdown', () => {
       timeoutMs: 50,
     });
     expect(dev.messages()).not.toContain('shutdown complete');
+    expect(calls.abandon).toBe(1);
     expectNoSignalListeners(dev.signals);
   });
 
@@ -218,7 +227,7 @@ describe('runDev shutdown', () => {
   });
 
   it('forces exit 1 when both the database check and closing the pool fail', async () => {
-    const { database } = fakeDatabase({
+    const { database, calls } = fakeDatabase({
       check: () => Promise.reject(new Error('synthetic check failure')),
       close: () => Promise.reject(new Error('synthetic close failure')),
     });
@@ -227,6 +236,7 @@ describe('runDev shutdown', () => {
     await expect(dev.result).resolves.toBe(1);
     expect(dev.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(dev.messages()).toEqual(['dev starting', 'db check failed', 'closing database pool failed']);
+    expect(calls.abandon).toBe(1);
     expectNoSignalListeners(dev.signals);
   });
 
