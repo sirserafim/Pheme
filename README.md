@@ -39,6 +39,9 @@ npm ci
 Copy-Item .env.example .env
 ```
 
+`npm ci` must leave `package.json` and `package-lock.json` unchanged (CI checks this). The
+untracked `node_modules/.package-lock.json` is a different file and is ignored.
+
 Replace the three `change-me` passwords in `.env` with generated ones (`notepad .env`). Hex
 passwords need no percent-encoding in `DATABASE_URL`:
 
@@ -81,12 +84,26 @@ unrelated log text. The target database is logged as host, port, database and us
 
 The process exits with **0** after a clean shutdown. It exits with **1** if the environment is
 invalid (the log names the variables, never their values), if the database check fails, or if
-closing the pool fails or takes longer than 10 seconds.
+closing the pool fails or takes longer than 10 seconds. A second Ctrl+C during shutdown also
+exits 1. When the pool cannot close in time, leftover sockets are destroyed so they cannot keep
+the process running after the deadline.
 
-**Windows note.** After Ctrl+C, `npm run dev` itself may report exit code 1 even though the server
-logged `shutdown complete`. npm forwards the interrupt to the shell it started by terminating it.
-To see the server's own exit code, run it without npm, then check `$LASTEXITCODE` as a separate
-command after pressing Ctrl+C:
+**Ctrl+C and npm.** The completion message `shutdown complete` is an info log: it appears at
+`LOG_LEVEL=info` (the default), not at `warn` or quieter, and not after a forced kill.
+
+On **Windows**, `child.kill("SIGINT")` is not a real Ctrl+C: Node documents that it terminates
+the process instead of delivering an interrupt, so no shutdown handler runs. A real console
+Ctrl+C (`CTRL_C_EVENT`) to `node --import tsx src/main.ts` logs the full shutdown and exits 0.
+
+`npm run dev` is a wrapper. After a real Ctrl+C:
+
+- Windows: the server logs `shutdown complete` and exits 0; npm itself reports exit code 1
+  because it forwards the interrupt to the `cmd.exe` it started.
+- Linux: the server still logs `shutdown complete` and exits 0, but `npm run dev` reports 130
+  (`128 + SIGINT`). The terminal sends SIGINT to the whole process group; npm then also forwards
+  it. The extra exit code comes from npm, not from a missed shutdown.
+
+To see the server's own exit code:
 
 ```powershell
 Set-Location server
@@ -108,8 +125,9 @@ npm run format            # apply Biome's formatting and safe fixes
 
 The integration tests start their own throwaway PostgreSQL containers with Testcontainers, using
 the same image and init script as Compose. They do not touch the Compose database. The test that
-sends SIGINT to `dev` runs on Linux only and is skipped on Windows. On Windows, Node cannot deliver
-SIGINT to a child process and terminates it instead.
+sends SIGINT to `dev` runs on Linux only and is skipped on Windows: `child.kill("SIGINT")` is not a
+real console interrupt there. If an integration test cannot start PostgreSQL, the error names the
+stage (Docker access, image pull, or startup/readiness) and does not print synthetic passwords.
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the same checks on Ubuntu 24.04.
 Push runs test the pushed commit. Pull request runs test GitHub's merge of the PR head into the base

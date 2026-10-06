@@ -1,167 +1,153 @@
 # Phase 0 evidence
 
-Recorded 2026-10-05 (UTC) on the `phase-0-setup` branch. Everything below is the observed output of
-real commands. Unit and integration results use synthetic test data and throwaway containers. The
-local Compose and `dev` runs use the developer's own `.env`, whose values are never printed.
+Recorded 2026-10-06 (UTC) on `phase-0-setup`. This file covers the Phase 0 repairs after review of
+`be2e092`. Commands, exit codes and counts below are observed output. Unit and integration tests
+use synthetic data and throwaway Testcontainers. Compose and Ctrl+C checks used a disposable
+project `pheme-verify` on host port 55432, not the developer's `pheme_pgdata` volume and not `.env`.
 
-**Commit under test:** `f80e04cf1f8b899333744d0d1a88c052e00c405a`. The commit that adds this file
-changes only Markdown (`README.md`, `AGENTS.md`, `PHASES.md` and `docs/`), and Biome does not check
-Markdown, so every input to these checks is unchanged. A file cannot contain the SHA of the commit
-that adds it, so the CI results for the pushed PR head SHA and GitHub's merge SHA are reported in
-the pull request.
+**Checked code:** `f2de80685270c71d525c166cdaf9a667fbed962b` (tree `29bc7c6dfee3080b1de27c6ba09f5a0d124ed65d`).
+The commit that adds this file and README notes changes only Markdown, which Biome does not check,
+so the inputs to lint, typecheck and tests are the same tree. CI results for the pushed head SHA
+and, if a pull request is opened, GitHub's merge SHA are separate and are not inferred from local
+runs.
+
+**Baseline the reviewer used:** `be2e092`. Commits on top of it:
+
+| SHA | Subject |
+|---|---|
+| `7fbf1fa` | `fix(logging): redact secrets per value and keep JSON valid` |
+| `a4a1b34` | `fix(config): reject DATABASE_URL components pg cannot decode` |
+| `7d48960` | `fix(dev): end the process when shutdown cannot finish cleanly` |
+| `011fc72` | `fix(dev): wait for database sockets to close before reporting shutdown` |
+| `38d61d1` | `fix(dev): destroy leftover sockets when shutdown times out` |
+| `871d1b5` | `test(integration): wait for process close and keep secrets out of diagnostics` |
+| `f2de806` | `ci: fail if npm ci changes tracked package files` |
 
 ## Environment
 
 | Item | Value |
 |---|---|
-| OS / shell | Windows 11 x64 (10.0.26300), Windows PowerShell 5.1.26100.9549 |
-| Node / npm | v24.21.0 / 11.19.0, the portable build at `C:\dev\.tools\node-v24.21.0-win-x64` (zip SHA-256 verified, see [versions.md](../versions.md)) |
-| Installed Node | 24.15.0, unchanged; used only for the engines check below |
+| OS / shell | Windows 11 x64 (10.0.26300), Windows PowerShell 5.1 |
+| Node / npm | v24.21.0 / 11.19.0, portable build at `C:\dev\.tools\node-v24.21.0-win-x64` |
 | Docker | Docker Desktop, Engine 29.4.0, Compose v5.1.1 |
+| Linux checks | `node:24.21.0-trixie-slim` (`sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66`), npm 11.19.0 |
 
-npm printed `npm warn Unknown env config "devdir"` on every command. This comes from a user-level
-environment setting on this machine, not from the repository, and does not affect results.
+npm printed `npm warn Unknown env config "devdir"` on this machine. That comes from a user-level
+setting, not from the repository.
+
+## What was reproduced vs reported vs blocked
+
+**Reproduced application defects (on `be2e092`, then fixed):**
+
+1. With `Date.now()` stubbed to `1791245000000` and secret `"17912450"`, `logger.info("startup")`
+   wrote invalid JSON (`"time":[REDACTED]00000`). Root cause: the scrubber ran on the finished JSON
+   line. Fix: sanitize values in `hooks.logMethod` before pino serializes them.
+2. `secretsFromDatabaseUrl("postgres://app:abc1234@127.0.0.1/pheme")` then
+   `logger.error(new Error("example boundary included abc1234"))` leaked the password (3 times:
+   `msg`, `err.message`, `err.stack`). Root cause: secrets shorter than 8 characters were skipped.
+   Fix: every non-empty secret is redacted; the cost is over-masking of the same characters in
+   unrelated text.
+3. `postgres://%FF:synthetic-password@127.0.0.1/pheme` passed `z.url()` then `describeDatabase()`
+   threw `URIError` before the env error handler. Fix: refine the schema with the same decoders
+   pg-connection-string uses; `runDev` returns 1 with a sanitized `DATABASE_URL` problem.
+
+**Reproduced shutdown defects (against `runDev` with a stub pool, then against a paused database):**
+
+4. A second SIGINT while `close()` was still pending returned 0 and logged `shutdown complete`
+   after `exit(1)` had already been requested. Fix: a `forced` flag; success is logged only when
+   close finished and no forced exit happened.
+5. `close()` rejecting or hanging returned 1 from `runDev` but did not call `exit(1)`, so open
+   handles could keep the process alive. Fix: `exit(1)` on those paths.
+6. Pausing the disposable database after `db ok`, then a real Ctrl+C: `pool.end()` resolved and
+   the process logged `shutdown complete`, then stayed alive on the open socket (~25 s until the
+   helper killed it). Root cause: pg-pool resolves `end()` when it has dropped clients, before the
+   TCP sockets close; a timeout race does not cancel those handles. Fix: wait for each connected
+   client's `end`, and on deadline/failure call `abandon()` which `destroy()`s leftover streams.
+   After that change, the same paused-database Ctrl+C exited 1 in 10669 ms with
+   `closing database pool timed out` and no success message.
+
+**Reported symptom that was not an application miss of `shutdown complete`:**
+
+7. At `LOG_LEVEL=info`, one real console Ctrl+C after `db ok` **does** log `shutdown complete` on
+   the direct Node process (Windows exit 0, Linux PTY exit 0). The missing completion, when it
+   appeared in review, was mixed with wrapper/process-group behaviour and with the hung-socket
+   case above.
+
+**Environment / wrapper facts (not treated as application shutdown bugs):**
+
+- Windows `child.kill("SIGINT")` after `db ok`: process exit `code=null`, `signal=SIGINT`, logs
+  only `dev starting | db ok`. Node documents that this is `TerminateProcess`, not a console
+  interrupt. The Linux integration test still uses `kill('SIGINT')` and is skipped on Windows.
+- `npm run dev` after a real Ctrl+C: server logs the full shutdown; **npm** reports 1 on Windows
+  (it kills the `cmd.exe` it started) and 130 on Linux (`128+SIGINT`, process group + npm forward).
+  A preload probe on Linux showed `main.ts` itself exiting 0.
+
+**Install lockfile change:** not reproduced. See below.
 
 ## Install
 
-| Command | Exit | Result |
-|---|---|---|
-| `npm ci` with installed Node 24.15.0 | 1 | `EBADENGINE`, `Required: {"node":">=24.21.0 <25"}` |
-| `node_modules` removed, then `npm ci` with Node 24.21.0 | 0 | 242 packages added in about 27 s |
-| `npm ls` | 0 | no missing, invalid or extraneous packages |
-| `git status` after install | — | `package-lock.json` unchanged |
+Disposable clones (no `.env`), Node 24.21.0, npm 11.19.0, project `.npmrc`. No other npm command
+was running.
 
-The lockfile (version 3) also lists the Linux x64 native packages that CI needs:
-`@typescript/typescript-linux-x64`, `@esbuild/linux-x64`, `@rolldown/binding-linux-x64-gnu`,
-`@biomejs/cli-linux-x64` and `lightningcss-linux-x64-gnu`, plus their musl variants where they
-exist.
+| Where | `npm ci` | `package-lock.json` SHA-256 before | after | git status |
+|---|---|---|---|---|
+| Windows clean clone | exit 0, 18 s, 242 packages | `79f6b5459f3a299e11f29f64d3fab64eac66690c978da4184f59e50c744a28ec` | same | clean |
+| Linux container | exit 0, 5 s, 242 packages | same | same | `package.json` / `server/package.json` hashes also unchanged |
 
-## Checks
+`node_modules/.package-lock.json` is a different, untracked file (present after install). npm 11.19
+warns that esbuild, protobufjs and ssh2 have install scripts not in `allowScripts`; that warning
+does not rewrite the tracked lockfile. CI now runs
+`.github/scripts/check-package-files-unchanged.sh` after `npm ci` in both jobs.
+
+## Checks on `f2de806`
 
 | Command (repository root) | Exit | Result |
 |---|---|---|
-| `npm run lint` | 0 | `Checked 26 files in 20ms. No fixes applied.` |
+| `npm run lint` | 0 | `Checked 31 files in 31ms. No fixes applied.` |
 | `npm run typecheck` | 0 | no errors |
-| `npm run test:unit` | 0 | 5 files, 22 tests passed |
-| `npm run test:integration` | 0 | 3 files, 11 passed, 1 skipped (12) |
-| `npm test` (unit, then integration) | 0 | the same two results, in about 18 s |
+| `npm run test:unit` | 0 | 7 files, **59 passed** |
+| `npm run test:integration` | 0 | 3 files, **11 passed, 1 skipped** (12) |
 
-The TypeScript 7 checks (`--skipLibCheck false`, and switching off each strictness flag) are listed
-in [versions.md](../versions.md#typescript-7-compatibility).
+The skipped test is SIGINT via `child.kill` on Windows. The Linux job is expected to run it.
 
-**Unit tests** (no Docker, network or API keys):
-- `env.test.ts`, 7 tests:
-  - defaults and numeric coercion; empty values count as unset
-  - only the command's own variables are returned, and no API keys are needed
-  - a missing `DATABASE_URL` is reported by name
-  - invalid values are reported by name without echoing them
-  - a URL without a host is rejected
-- `logger.test.ts`, 6 tests:
-  - secret-named fields are redacted
-  - a secret inside `error.message`, `stack` and `cause` is removed, including the `msg` of
-    `logger.error(err)`
-  - the same inside an `AggregateError`
-  - passwords in URLs that were never registered as secrets are masked
-  - only allowlisted error fields are logged
-  - every line has `service` and `runId`
-- `shutdown.test.ts`, 5 tests:
-  - the first signal resolves and later signals count as repeats
-  - `dispose` removes the listeners
-  - task timeout outcomes: done, failed and timeout
-- `dev-command.test.ts`, 1 test: invalid env exits 1 before connecting and logs names, not values.
-- `compose-policy.test.ts`, 3 tests:
-  - Compose and the tests use the same pinned image
-  - the port is published on loopback only
-  - the named volume uses the PostgreSQL 18 path
+**Focused reproductions (then passing after the fix):**
+- Logging: 6 of 14 new logger tests failed on `be2e092`; the external repro script then reported
+  valid JSON (`time=1791245000000`) and 0 occurrences of `abc1234`.
+- `DATABASE_URL`: 10 new tests failed with `URIError` / accepted malformed escapes; after the
+  refine, `runDev` with `%FF` exits 1, logs `user name is not valid percent-encoded UTF-8`, and
+  does not echo the password, `%FF`, or `URIError`.
+- Shutdown unit tests: 51 then 54 then 59 as abandon and classifiers were added.
 
-**Integration tests** (Testcontainers, same image and init script as Compose):
-- `app-role.test.ts`, 8 tests. The database is named `Pheme-IT` and the password is
-  `it's a "quoted"; \secret $HOME`, to exercise the init script's SQL quoting.
-  - `pheme_app` logs in and passes the `SELECT 1` check
-  - it has no elevated role attributes
-  - while connected (`current_user = pheme_app`), each of these fails with SQLSTATE 42501: CREATE
-    TABLE in `public`, CREATE SCHEMA, CREATE TEMP TABLE, CREATE ROLE, CREATE DATABASE
-  - another login role cannot connect, because CONNECT was revoked from PUBLIC
-- `connect-timeout.test.ts`, 1 test: a TCP server that accepts connections but never answers makes
-  the pool give up after the configured 300 ms timeout.
-- `dev-process.test.ts`, 3 tests:
-  - `dev` logs `db ok` with the target but not the password, and writes nothing to stdout
-  - a wrong password exits 1 with `err.code` 28P01 and no password in the output
-  - **skipped on Windows:** SIGINT gives exit 0. Node on Windows cannot deliver SIGINT to a child
-    process; it terminates it instead. This test runs in Linux CI.
+## Ctrl+C and disposable Compose
 
-**Redaction mutation check.** I temporarily replaced `scrub(line)` with `line` in
-`server/src/logging/logger.ts`. 3 of the 6 logger tests then failed: the message/stack/cause,
-`AggregateError` and URL-password tests. After `git checkout` restored the file, all 6 passed. The
-field-path redaction tests still passed during the mutation, because pino's `redact` covers them
-independently.
+Project `pheme-verify`, env file outside the repo, port **55432**, synthetic passwords. Clone had
+no `.env`. Interrupt was `GenerateConsoleCtrlEvent` (Windows) or PTY `\x03` (Linux `script`).
 
-## Compose and `dev` acceptance
-
-Run by `C:\dev\.tools\phase0-acceptance.ps1` (kept outside the repository) at 2026-10-05T22:49:49Z.
-Ctrl+C was a real `CTRL_C_EVENT`, the event Windows sends when a user presses Ctrl+C. It was sent
-with `GenerateConsoleCtrlEvent` to a process started in its own console.
-
-**Compose service:**
-
-| Check | Result |
+| Scenario | Result |
 |---|---|
-| `docker compose up --detach --wait` | exit 0; `pheme-postgres-1` is `healthy` |
-| Published port | `127.0.0.1:5432->5432/tcp`; the only host listener on 5432 is `127.0.0.1:5432` |
-| Mounts | volume `pheme_pgdata` at `/var/lib/postgresql` (read-write); bind `docker/postgres/init` at `/docker-entrypoint-initdb.d` (`rw=false`) |
-| `SHOW data_directory` | `/var/lib/postgresql/18/docker` |
-| `SELECT version()` | `PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on x86_64-pc-linux-gnu …` |
-| `pheme_app` attributes | not superuser; cannot create databases or roles; no replication; no RLS bypass; connection limit 20 |
-| Database ACL | `{pheme_admin=CTc/pheme_admin,pheme_app=c/pheme_admin}`: PUBLIC has no CONNECT or TEMP |
-| `has_schema_privilege('pheme_app', 'public', 'CREATE')` | `false` |
+| Windows direct `node --import tsx src/main.ts`, Ctrl+C after `db ok` | exit **0** in ~1 s; `dev starting`, `db ok`, `shutdown requested (SIGINT)`, `shutdown complete`; stdout empty |
+| Windows `npm run dev` (root and server), same interrupt | npm exit **1**; server still logged the four messages including `shutdown complete` |
+| Linux PTY direct node | exit **0**; same four messages |
+| Linux PTY `npm run dev` | npm/script exit **130**; server logged `shutdown complete`; `main.ts` probe exit 0 |
+| Paused database, then Ctrl+C (after socket destroy) | exit **1** in 10669 ms; `closing database pool timed out`; no `shutdown complete` |
+| `docker compose -p pheme-verify up --detach --wait` | exit 0; `pheme-verify-postgres-1` healthy; `127.0.0.1:55432->5432/tcp` |
+| `docker compose -p pheme-verify down --volumes` | exit 0; throwaway volume removed |
 
-When the volume was first created, earlier in the session, the container log showed the entrypoint
-running `/docker-entrypoint-initdb.d/10-create-app-role.sh`. Its syntax was also checked with
-`bash -n` inside the same image, because no Git Bash is installed locally.
+Synthetic passwords: 0 matches in captured interrupt logs. The developer's Compose volume was not
+deleted. `.env` was not overwritten.
 
-**`dev` runs** (the log messages are the `msg` fields, in order):
+## Remaining limits
 
-| Scenario | Exit | Log messages |
-|---|---|---|
-| `node --env-file-if-exists=../.env --import tsx src/main.ts` in `server/`, Ctrl+C after `db ok` | **0** | dev starting, db ok, shutdown requested, shutdown complete |
-| `npm run dev` from the root, Ctrl+C after `db ok` | 1 (npm's code) | dev starting, db ok, shutdown requested, shutdown complete |
-| `docker compose restart postgres` while `dev` runs, then Ctrl+C | **0** | dev starting, db ok, idle database client error (`57P01`), shutdown requested, shutdown complete. The process stayed alive through the restart. |
-| Database stopped (`docker compose stop postgres`) before start | 1 | dev starting, db check failed (`ECONNREFUSED`); 358 ms in total, including Node and tsx startup |
-| No `.env`; `DATABASE_URL` malformed and containing a marker secret, `DB_POOL_MAX=0`, `LOG_LEVEL=loud` | 1 | `Invalid environment for "dev": LOG_LEVEL is invalid (…); DATABASE_URL is invalid (Invalid URL); DB_POOL_MAX is invalid (Too small: expected number to be >=1)`. Neither the marker nor `loud` appears in the output. |
-| No `.env` and no `DATABASE_URL` | 1 | `Invalid environment for "dev": DATABASE_URL is missing` |
-| `docker compose down`, then `up --detach --wait`, then `dev` with Ctrl+C | **0** | The volume remained, the entrypoint logged `Skipping initialization`, `pheme_app` still existed, and `dev` logged in with the existing password. |
+- Over-masking: a very short registered secret also redacts the same characters in `runId` or other
+  text. Numeric fields and bindings are no longer rewritten as JSON syntax.
+- `npm run dev` exit codes after Ctrl+C stay wrapper-defined (Windows 1, Linux 130). Use the direct
+  `node` command in `server/` for the server's own code.
+- Windows automated SIGINT remains skipped; real Ctrl+C was verified separately.
+- GPG of Node's `SHASUMS256.txt` is still unverified.
+- **CI:** local results do not stand in for GitHub Actions. Push tests this head SHA; a
+  `pull_request` run, when present, tests a different merge SHA.
 
-In every run, stdout contained no JSON log lines; npm printed only its script banner there.
-Afterwards I searched all 14 captured log files for the three secret values in `.env`
-(`POSTGRES_PASSWORD`, `PHEME_APP_DB_PASSWORD` and `DATABASE_URL`): 0 matches.
+## Concepts
 
-**Why `npm run dev` exits 1 on Windows.** The server's own exit code is 0, as the direct `node`
-run shows, and both runs log the same complete shutdown. npm's
-`@npmcli/run-script/lib/signal-manager.js` forwards the signal with `proc.kill(signal)` to the
-`cmd.exe` it started. On Windows that terminates the shell, so npm reports a failure. The README
-documents the direct command for anyone who needs the server's exit code.
-
-## CI design (results reported in the PR)
-
-- `push` runs (every branch) test the pushed commit, which is the PR head SHA used for the local
-  evidence above.
-- `pull_request` runs test GitHub's temporary merge commit of that head into `main`, which is a
-  different SHA.
-- Each job's summary records the event and the tested SHA. For pull requests it also records the
-  PR head and base SHAs, and whether the merge result has the same file tree as the head.
-- Jobs:
-  - `checks`: `npm ci`, lint, typecheck, unit tests
-  - `integration`: `npm ci`, integration tests (including the Linux SIGINT test), then a Compose
-    smoke test using `.env.example`, removing its throwaway volume afterwards
-
-## Skipped, blocked or not verified
-
-- **Skipped on Windows:** the automated SIGINT test, for the reason given above. A real Ctrl+C was
-  verified manually instead.
-- **Not verified:** the GPG signature of Node's `SHASUMS256.txt`, because GPG is not installed.
-  Only the SHA-256 checksum was compared.
-- **Not exercised:** the README's `\password pheme_app` procedure, which needs an interactive
-  terminal.
-- **Pending at the time of writing:** the CI runs for the pushed head SHA and the PR merge SHA.
-- **Not covered:** macOS or Linux desktop development (only CI runs on Linux), performance
-  measurement, and any security assessment beyond the tests listed here.
+See the end of the chat report for a short Greek explanation of redaction-before-serialize,
+percent-decoding vs schema validation, and process-group signals vs `process.exit`.
