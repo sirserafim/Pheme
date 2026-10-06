@@ -2,7 +2,7 @@ import type { DestinationStream } from 'pino';
 import { z } from 'zod';
 import { databaseEnvSchema, EnvValidationError, logEnvSchema, parseEnv } from '../config/env.ts';
 import { checkDatabase, type HealthResult } from '../db/health.ts';
-import { createPool, type DatabaseConfig, describeDatabase } from '../db/pool.ts';
+import { createPool, type DatabaseConfig, describeDatabase, trackConnections } from '../db/pool.ts';
 import { runWithTimeout, type SignalSource, waitForShutdown } from '../lifecycle/shutdown.ts';
 import { createLogger, type Logger } from '../logging/logger.ts';
 import { secretsFromDatabaseUrl } from '../logging/scrub.ts';
@@ -113,7 +113,14 @@ function parseDevEnv(deps: DevDependencies): z.output<typeof devEnvSchema> | und
 
 function openPgDatabase(config: DatabaseConfig, logger: Logger): DevDatabase {
   const pool = createPool(config, logger);
-  return { check: () => checkDatabase(pool), close: () => pool.end() };
+  const connections = trackConnections(pool);
+  return {
+    check: () => checkDatabase(pool),
+    close: async () => {
+      await pool.end();
+      await connections.allClosed();
+    },
+  };
 }
 
 /** Returns true only if the pool closed before the deadline. */
