@@ -147,6 +147,31 @@ deleted. `.env` was not overwritten.
 - **CI:** local results do not stand in for GitHub Actions. Push tests this head SHA; a
   `pull_request` run, when present, tests a different merge SHA.
 
+## CI (GitHub Actions)
+
+Queried via the public GitHub API (run and job **conclusions** only; job logs returned 403 without
+credentials, so CI test counts are not available here).
+
+**Push** of `32688517e297b7b76304f907727ef130062c2213` (repair code plus the first evidence/README
+commit). That is the SHA the jobs below actually tested:
+
+| Item | Value |
+|---|---|
+| Event | `push` |
+| Head SHA tested | `32688517e297b7b76304f907727ef130062c2213` |
+| Run | [37504588221](https://github.com/sirserafim/Pheme/actions/runs/37504588221) |
+| Run conclusion | **success** |
+| Job `Lint, typecheck, unit tests` | success |
+| Job `Integration tests and Compose smoke test (Docker)` | success |
+
+CI log bodies were not readable (API 403), so this table does not claim a test count from GitHub.
+
+A later Markdown-only commit on this branch is a different SHA; do not treat run 37504588221 as
+having tested that later SHA.
+
+**Pull request merge SHA:** no `pull_request` run exists. There is no open PR for `phase-0-setup`,
+so GitHub has not built a merge commit. Do not treat the push result as coverage of a merge SHA.
+
 ## Concepts
 
 See the end of the chat report for a short Greek explanation of redaction-before-serialize,
