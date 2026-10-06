@@ -43,6 +43,14 @@ describe('runWithTimeout', () => {
     ).resolves.toEqual({ status: 'failed', error });
   });
 
+  it('reports a task that throws before returning a promise as failed', async () => {
+    const error = new Error('synthetic synchronous failure');
+    const task = (): Promise<void> => {
+      throw error;
+    };
+    await expect(runWithTimeout(task, 1_000)).resolves.toEqual({ status: 'failed', error });
+  });
+
   it('stops waiting for a task that never finishes', async () => {
     const outcome = await runWithTimeout(() => new Promise<void>(() => {}), 20);
     expect(outcome).toEqual({ status: 'timeout' });

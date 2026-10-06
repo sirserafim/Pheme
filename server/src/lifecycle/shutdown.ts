@@ -54,13 +54,17 @@ export function waitForShutdown(
 
 export type TimedOutcome = { status: 'done' } | { status: 'failed'; error: unknown } | { status: 'timeout' };
 
-/** Runs a cleanup step with an upper bound, so a hung cleanup cannot block exit forever. */
+/**
+ * Waits for a cleanup step for at most `timeoutMs`. On timeout it only stops waiting: the task
+ * keeps running and its sockets or timers can still keep the process alive, so the caller must
+ * end the process itself. A task that throws synchronously is reported as failed.
+ */
 export async function runWithTimeout(task: () => Promise<void>, timeoutMs: number): Promise<TimedOutcome> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<TimedOutcome>((resolve) => {
     timer = setTimeout(() => resolve({ status: 'timeout' }), timeoutMs);
   });
-  const work = task().then(
+  const work = new Promise<void>((resolve) => resolve(task())).then(
     (): TimedOutcome => ({ status: 'done' }),
     (error: unknown): TimedOutcome => ({ status: 'failed', error }),
   );
